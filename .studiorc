@@ -1,0 +1,72 @@
+#!/bin/bash
+
+start_sup () { 
+    hab sup status 2> /dev/null 1>&2;
+    [[ $? == 0 ]] && return;
+    mkdir -p /hab/sup/default;
+    echo "=> Launching the Habitat Supervisor in the background...";
+    hab sup run $* > /hab/sup/default/sup.log & while :; do
+        hab sup status > /dev/null;
+        [[ $? -eq 0 ]] && break || sleep 1;
+    done
+}
+
+run_demo() {
+  sup-term
+  echo "Starting the supervisor: $HAB_SUP_BINARY"
+  start_sup
+
+  echo "Starting prometheus with selector binding:"
+  echo 'hab svc start jaym/prometheus --channel unstable --bind "targets:[metric-http-port]"'
+  hab svc start jaym/prometheus --channel unstable --bind "targets:[metric-http-port]" > /dev/null
+
+  echo "Starting hello-service"
+  hab svc start jaym/hello-service --channel unstable > /dev/null
+
+  echo "Starting world-service"
+  hab svc start jaym/world-service --channel unstable > /dev/null
+
+
+  cat <<-END
+  This demo has started 3 services: prometheus, hello-service, and world service.
+  prometheus is used to monitor hello-service and world-service. hello-service
+  exposes a metrics endpoint, and has a counter called hello_counter that it
+  increments ever second. world-service is similar to hello-service, except it
+  increments a counter called world_counter.
+
+  The point of this demo is to show that if a bind can be bound to a selector
+  instead of always a service group, prometheus can start monitoring any services
+  that come up with some label that it expects. This demo, it piggy backs of
+  exported config values. This however has slight problems in that config values
+  are attached to members, and it would make more sense if there was a concept
+  of labeling service groups.
+
+  This demo implements the most basic selector... the existence of a label. I think
+  labels could be key/value pairs. There should also be a way to use mutiple lables.
+  For example, there should be a way to say select all the services that expose a
+  metrics endpoint AND are in the prod environment.
+
+
+END
+
+  echo "Waiting for services"
+  sleep 10
+  hab svc status
+  echo
+
+  echo "Will now query prometheus for a min."
+  echo "You should see metrics appear for hello_counter and world_counter."
+
+  for i in {1..10}
+  do
+    echo "Querying prometheus"
+    curl -s http://localhost:20090/api/v1/query\?query\=hello_counter | jq ".data .result"
+    curl -s http://localhost:20090/api/v1/query\?query\=world_counter | jq ".data .result"
+    sleep 6
+  done
+}
+
+hab pkg install jaym/hab-sup/0.54.0-dev/20180212003516 --channel unstable
+hab pkg install core/curl --binlink
+hab pkg install core/jq-static --binlink
+export HAB_SUP_BINARY=/hab/pkgs/jaym/hab-sup/0.54.0-dev/20180212003516/bin/hab-sup
